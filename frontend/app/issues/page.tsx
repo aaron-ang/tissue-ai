@@ -1,6 +1,11 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Editor from "@monaco-editor/react";
@@ -8,35 +13,52 @@ import Editor from "@monaco-editor/react";
 import "./issues.css";
 import { GitHubIssueAnalysis, FlattenedFile } from "../../lib/api";
 
+const subscribeToStorage = (onChange: () => void) => {
+  window.addEventListener("storage", onChange);
+  return () => window.removeEventListener("storage", onChange);
+};
+
+function parseAnalysisData(raw: string | null): {
+  analysis: GitHubIssueAnalysis;
+  flattenedFiles: FlattenedFile[];
+} | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error("Error parsing analysis data:", error);
+    return null;
+  }
+}
+
 export default function IssuesPage() {
   const router = useRouter();
   const [showSummary, setShowSummary] = useState(true);
-  const [analysis, setAnalysis] = useState<GitHubIssueAnalysis | null>(null);
-  const [flattenedFiles, setFlattenedFiles] = useState<FlattenedFile[]>([]);
-  const [selectedFile, setSelectedFile] = useState<FlattenedFile | null>(null);
+  // undefined during prerender and hydration, so the server and first client
+  // render agree; the client snapshot is read after hydration.
+  const analysisDataStr = useSyncExternalStore<string | null | undefined>(
+    subscribeToStorage,
+    () => localStorage.getItem("analysisData"),
+    () => undefined,
+  );
+  const analysisData = useMemo(
+    () =>
+      analysisDataStr === undefined
+        ? undefined
+        : parseAnalysisData(analysisDataStr),
+    [analysisDataStr],
+  );
+  const analysis = analysisData?.analysis ?? null;
+  const flattenedFiles = analysisData?.flattenedFiles ?? [];
+  const [pickedFile, setPickedFile] = useState<FlattenedFile | null>(null);
+  const selectedFile = pickedFile ?? flattenedFiles[0] ?? null;
 
   useEffect(() => {
-    // Load analysis data from localStorage
-    const analysisDataStr = localStorage.getItem("analysisData");
-
-    if (analysisDataStr) {
-      try {
-        const analysisData = JSON.parse(analysisDataStr);
-        setAnalysis(analysisData.analysis);
-        setFlattenedFiles(analysisData.flattenedFiles);
-
-        if (analysisData.flattenedFiles.length > 0) {
-          setSelectedFile(analysisData.flattenedFiles[0]);
-        }
-      } catch (error) {
-        console.error("Error parsing analysis data:", error);
-        router.push("/");
-      }
-    } else {
-      // No data available, redirect to home
+    // No usable data in localStorage: send the user back to start an analysis.
+    if (analysisData === null) {
       router.push("/");
     }
-  }, [router]);
+  }, [analysisData, router]);
 
   // Show loading if no analysis data yet
   if (!analysis) {
@@ -408,7 +430,7 @@ export default function IssuesPage() {
                                   ? "bg-white/10"
                                   : "bg-transparent hover:bg-white/5"
                               }`}
-                              onClick={() => setSelectedFile(file)}
+                              onClick={() => setPickedFile(file)}
                             >
                               <div className="font-mono text-sm mb-2 break-all">
                                 {file.pathName}
